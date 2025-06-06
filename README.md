@@ -78,9 +78,9 @@ VOICE_TOGGLED = True              # Enable/disable voice output
 ---
 
 ## Credits
-- [Ollama](https://ollama.com/)
+- [Ollama](https://ollama.com)
 - [kokoro_onnx](https://github.com/r9y9/kokoro-onnx)
-- [smolagent](https://github.com/smol-ai/smolagent)
+- [smolagent](https://github.com/huggingface/smolagents)
 
 ---
 
