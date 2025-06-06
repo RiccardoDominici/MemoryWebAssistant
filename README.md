@@ -1,11 +1,11 @@
-# OllamaTestRequest: Local AI Chatbot with Voice
+# MemoryWebAssistant: Local AI Chatbot with Voice
 
 ## Overview
 This project is a fully local AI chatbot assistant with memory, voice output, and optional internet search capabilities. All processing, including language model inference and text-to-speech (TTS), runs on your own machine—no cloud services required.
 
 - **Chatbot Model:** Uses [Ollama](https://ollama.com/) to run LLMs locally (e.g., Gemma, Llama, etc.).
 - **Embeddings:** Uses Ollama's embedding models for memory/context retrieval.
-- **Voice Synthesis:** Uses [kokoro_onnx](https://github.com/r9y9/kokoro-onnx) for local TTS in your chosen language.
+- **Voice Synthesis:** Uses [kokoro_onnx](https://github.com/thewh1teagle/kokoro-onnx) for local TTS in your chosen language.
 - **No data leaves your computer.**
 
 ---
