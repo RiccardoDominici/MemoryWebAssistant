@@ -28,7 +28,7 @@ pip install numpy ollama pillow soundfile simpleaudio
 - You can use any supported model; update `MODEL_CHATBOT` and `MODEL_EMB` in `chat_bot.py` as needed.
 
 ### 3. Download kokoro_onnx Voice Templates
-- Download the [kokoro_onnx](https://github.com/r9y9/kokoro-onnx) voice synthesis engine and voices.
+- Download the [kokoro_onnx](https://github.com/thewh1teagle/kokoro-onnx) voice synthesis engine and voices.
 - Place the following files in the `voice/` directory:
   - `kokoro-v1.0.onnx`
   - `voices-v1.0.bin`
@@ -79,7 +79,7 @@ VOICE_TOGGLED = True              # Enable/disable voice output
 
 ## Credits
 - [Ollama](https://ollama.com)
-- [kokoro_onnx](https://github.com/r9y9/kokoro-onnx)
+- [kokoro_onnx](https://github.com/thewh1teagle/kokoro-onnx) 
 - [smolagent](https://github.com/huggingface/smolagents)
 
 ---
