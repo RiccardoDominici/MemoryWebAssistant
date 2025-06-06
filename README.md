@@ -35,7 +35,7 @@ pip install numpy ollama pillow soundfile simpleaudio
 - For other languages/voices, download the appropriate entries from the kokoro_onnx repository and place them in `voice/`.
 
 ### 4. Add Web Search Agent (smolagent)
-- To enable optional internet search, clone and set up [smolagent](https://github.com/smol-ai/smolagent) as described in their repository. Follow their instructions to install and configure the agent for your system.
+- To enable optional internet search, clone and set up [smolagent](https://github.com/huggingface/smolagents) as described in their repository. Follow their instructions to install and configure the agent for your system.
 
 ---
 
