@@ -20,6 +20,7 @@ import agent_web
 import re
 import threading
 import queue
+import datetime
 
 # =====================
 # Global Variables
@@ -162,7 +163,7 @@ def stream_response(prompt):
         content = emoji_pattern.sub("", content)
         tmp_content += content
         # Play audio at sentence boundaries
-        if content.endswith(('.', '?', '!', ':')):
+        if content.endswith(('.', '?', '!', ':')) and len(tmp_content) > 60:
             play_audio(tmp_content)
             tmp_content = ''
         response += content
@@ -207,13 +208,14 @@ def retrieve_memory_context(embeddings, paragraphs, prompt):
     prompt_embedding = ollama.embeddings(model=MODEL_EMB, prompt=prompt)["embedding"]
     most_similar_chunks = find_similar(prompt_embedding, embeddings)[:15]
     mem_prompt = "\nContext: "
+    mem_prompt += auto_translate("Current Date and Time: ") + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n"
     for score, index in most_similar_chunks:
         if score > 0.5:
             mem_prompt += paragraphs[index] + "\n"
-    if mem_prompt != "\nContext: ":
-        conversation.append({"role": "system", "content": mem_prompt})
-        return len(conversation) - 1
-    return -1
+
+    conversation.append({"role": "system", "content": mem_prompt})
+    return len(conversation) - 1
+    
 
 
 def save_information_from_index(prompt, response_ai, filename, embeddings, paragraphs):
