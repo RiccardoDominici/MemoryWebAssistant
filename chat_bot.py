@@ -37,6 +37,7 @@ VOICE = "if_sara"  # Default TTS voice
 VOICE_TOGGLED = True   # Whether voice output is enabled
 
 audio_queue = queue.Queue()  # Queue for audio playback requests
+generated_audio_queue = queue.Queue()  # New queue for pre-generated audio data
 conversation = []  # History of conversation messages
 
 # =====================
@@ -141,12 +142,12 @@ def stream_response(prompt):
     for chunk in stream:
         content = emoji_pattern.sub("", chunk["message"]["content"])
         tmp_content += content
-        if (content.endswith(('.', '?', '!', ':')) and len(tmp_content) > 60):
+        if (content.endswith(('.', '?', '!', ':')) and len(tmp_content) > 30):
             play_audio(tmp_content)
             tmp_content = ''
         response += content
         print(content, end='', flush=True)
-    if tmp_content:
+    if len(tmp_content) > 1:
         play_audio(tmp_content)
     conversation.append({"role": "assistant", "content": response})
     print('')
@@ -262,9 +263,9 @@ def play_audio(text):
     if VOICE_TOGGLED:
         audio_queue.put(text)
 
-def audio_worker():
+def audio_generator():
     """
-    Processes queued audio playback requests using TTS.
+    Pre-generates audio samples concurrently from queued text.
     """
     kokoro = Kokoro("voice/kokoro-v1.0.onnx", "voice/voices-v1.0.bin")
     while True:
@@ -272,10 +273,20 @@ def audio_worker():
         g2p = EspeakG2P(language="it")
         phonemes, _ = g2p(text)
         samples, sample_rate = kokoro.create(phonemes, VOICE, is_phonemes=True)
-        sf.write("voice/tmp.wav", samples, sample_rate)
-        wave_obj = sa.WaveObject.from_wave_file("voice/tmp.wav")
-        wave_obj.play().wait_done()
+        num_channels = samples.shape[1] if samples.ndim > 1 else 1
+        bytes_per_sample = samples.dtype.itemsize
+        generated_audio_queue.put((samples, sample_rate, num_channels, bytes_per_sample))
         audio_queue.task_done()
+
+def audio_worker():
+    """
+    Plays pre-generated audio samples as soon as available.
+    """
+    while True:
+        samples, sample_rate, num_channels, bytes_per_sample = generated_audio_queue.get()
+        wave_obj = sa.WaveObject(samples.tobytes(), num_channels, bytes_per_sample, sample_rate)
+        wave_obj.play().wait_done()
+        generated_audio_queue.task_done()
 
 # =====================
 # Main Application Entry Point
@@ -295,6 +306,8 @@ async def main():
             f.write("")
     paragraphs_local_memory = parse_file(filename)
     embeddings = get_embeddings(filename, paragraphs_local_memory)
+    # Start audio generation and playback threads
+    threading.Thread(target=audio_generator, daemon=True).start()
     threading.Thread(target=audio_worker, daemon=True).start()
     while True:
         prompt = input("<You> ")
