@@ -29,9 +29,8 @@ import agent_web
 from faster_whisper import WhisperModel
 import numpy as np
 import sounddevice as sd
-import soundfile as sf
-import subprocess
 import time
+import sys
 
 # =====================
 # Global Variables & Constants
@@ -298,47 +297,7 @@ def audio_worker():
         wave_obj.play().wait_done()
         generated_audio_queue.task_done()
 
-
-# =====================
-# Main Application Entry Point
-# =====================
-async def main():
-    """
-    Main loop: Handles user input while retrieving context, search results, and processing responses.
-    """
-    SYSTEM_PROMPT = auto_translate(
-        ("You are Gemma, an AI assistant that retrieves live data via internet, memory, or screenshots. "
-         "Incorporate any attached results before responding concisely and expressively with abundant punctuation (no emojis).")
-    )
-    conversation.append({"role": "system", "content": SYSTEM_PROMPT})
-    filename = "memory.txt"
-    if not os.path.exists(filename):
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write("")
-    paragraphs_local_memory = parse_file(filename)
-    embeddings = get_embeddings(filename, paragraphs_local_memory)
-    # Start audio generation and playback threads
-    threading.Thread(target=audio_generator, daemon=True).start()
-    threading.Thread(target=audio_worker, daemon=True).start()
-
-    model = WhisperModel(MODEL_VOICE_TRASC, device="cpu", compute_type="int8")
-
-    while True:
-        prompt = get_input_from_microphone(model)
-        if not prompt:
-            continue
-        memory_idx = retrieve_memory_context(embeddings, paragraphs_local_memory, prompt)
-        research_idx = handle_search_request(prompt)
-        bot_response = stream_response(prompt)
-        if research_idx >= 0:
-            conversation.pop(research_idx)
-        if memory_idx >= 0:
-            conversation.pop(memory_idx)
-        embeddings, paragraphs_local_memory = save_information_from_index(
-            prompt, bot_response, filename, embeddings, paragraphs_local_memory
-        )
-
-def record_until_silence( silence_threshold=0.01, silence_duration=2, sample_rate=44100):
+def record_until_silence( silence_threshold=0.2, silence_duration=2, sample_rate=44100):
     """
     Registra l'audio finché non viene rilevato silenzio prolungato, poi salva in MP3.
     """
@@ -387,10 +346,9 @@ def record_until_silence( silence_threshold=0.01, silence_duration=2, sample_rat
     temp_wav = "voice/tmp.wav"
     sf.write(temp_wav, audio_data, sample_rate)
     
-
 def get_input_from_microphone(model):
     
-    record_until_silence(silence_threshold=0.02, silence_duration=2, sample_rate=44100)
+    record_until_silence(silence_threshold=0.01, silence_duration=2, sample_rate=44100)
     print("\r<You> ", end='', flush=True)
     segments, _ = model.transcribe("voice/tmp.wav", word_timestamps=True,  vad_filter=True)
     output = ''
@@ -405,9 +363,46 @@ def get_input_from_microphone(model):
     return output.strip()
 
 # =====================
+# Main Application Entry Point
+# =====================
+async def main():
+    """
+    Main loop: Handles user input while retrieving context, search results, and processing responses.
+    """
+    SYSTEM_PROMPT = auto_translate(
+        ("You are Gemma, an AI assistant that retrieves live data via internet, memory, or screenshots. "
+         "Incorporate any attached results before responding concisely and expressively with abundant punctuation (no emojis).")
+    )
+    conversation.append({"role": "system", "content": SYSTEM_PROMPT})
+    filename = "memory.txt"
+    if not os.path.exists(filename):
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("")
+    paragraphs_local_memory = parse_file(filename)
+    embeddings = get_embeddings(filename, paragraphs_local_memory)
+    # Start audio generation and playback threads
+    threading.Thread(target=audio_generator, daemon=True).start()
+    threading.Thread(target=audio_worker, daemon=True).start()
+
+    model = WhisperModel(MODEL_VOICE_TRASC, device="cpu", compute_type="int8")
+
+    while True:
+        prompt = get_input_from_microphone(model)
+        if not prompt:
+            continue
+        memory_idx = retrieve_memory_context(embeddings, paragraphs_local_memory, prompt)
+        research_idx = handle_search_request(prompt)
+        bot_response = stream_response(prompt)
+        if research_idx >= 0:
+            conversation.pop(research_idx)
+        if memory_idx >= 0:
+            conversation.pop(memory_idx)
+        embeddings, paragraphs_local_memory = save_information_from_index(
+            prompt, bot_response, filename, embeddings, paragraphs_local_memory
+        )
+
+# =====================
 # Script Entry Point
 # =====================
 if __name__ == "__main__":
-
-    
     asyncio.run(main())

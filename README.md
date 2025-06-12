@@ -15,7 +15,7 @@ This project is a fully local AI chatbot assistant with memory, voice output, an
 ### 1. Install Python Dependencies
 
 ```bash
-pip install numpy ollama pillow soundfile simpleaudio
+pip install numpy ollama pillow soundfile simpleaudio sounddevice faster-wisper
 ```
 
 ### 2. Download Ollama and Required Models
