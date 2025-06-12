@@ -11,7 +11,8 @@ import datetime
 import base64
 import hashlib
 from io import BytesIO
-
+import sys
+import shutil
 # =====================
 # Third-Party Imports
 # =====================
@@ -25,16 +26,25 @@ from misaki import espeak
 from misaki.espeak import EspeakG2P 
 from kokoro_onnx import Kokoro 
 import agent_web
+from faster_whisper import WhisperModel
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
+import subprocess
+import time
 
 # =====================
 # Global Variables & Constants
 # =====================
 MODEL_CHATBOT = "gemma3:4b"  # Chatbot model name
 MODEL_EMB = "nomic-embed-text"  # Embedding model name
+MODEL_VOICE_TRASC = "large-v3"
+
 
 SYSTEM_LANGUAGE = "italian"  # System language for translation
 VOICE = "if_sara"  # Default TTS voice
 VOICE_TOGGLED = True   # Whether voice output is enabled
+
 
 audio_queue = queue.Queue()  # Queue for audio playback requests
 generated_audio_queue = queue.Queue()  # New queue for pre-generated audio data
@@ -270,7 +280,7 @@ def audio_generator():
     kokoro = Kokoro("voice/kokoro-v1.0.onnx", "voice/voices-v1.0.bin")
     while True:
         text = audio_queue.get()
-        g2p = EspeakG2P(language="it")
+        g2p = EspeakG2P(language=SYSTEM_LANGUAGE[:2])
         phonemes, _ = g2p(text)
         samples, sample_rate = kokoro.create(phonemes, VOICE, is_phonemes=True)
         num_channels = samples.shape[1] if samples.ndim > 1 else 1
@@ -287,6 +297,7 @@ def audio_worker():
         wave_obj = sa.WaveObject(samples.tobytes(), num_channels, bytes_per_sample, sample_rate)
         wave_obj.play().wait_done()
         generated_audio_queue.task_done()
+
 
 # =====================
 # Main Application Entry Point
@@ -309,8 +320,13 @@ async def main():
     # Start audio generation and playback threads
     threading.Thread(target=audio_generator, daemon=True).start()
     threading.Thread(target=audio_worker, daemon=True).start()
+
+    model = WhisperModel(MODEL_VOICE_TRASC, device="cpu", compute_type="int8")
+
     while True:
-        prompt = input("<You> ")
+        prompt = get_input_from_microphone(model)
+        if not prompt:
+            continue
         memory_idx = retrieve_memory_context(embeddings, paragraphs_local_memory, prompt)
         research_idx = handle_search_request(prompt)
         bot_response = stream_response(prompt)
@@ -322,8 +338,76 @@ async def main():
             prompt, bot_response, filename, embeddings, paragraphs_local_memory
         )
 
+def record_until_silence( silence_threshold=0.01, silence_duration=2, sample_rate=44100):
+    """
+    Registra l'audio finché non viene rilevato silenzio prolungato, poi salva in MP3.
+    """
+    # Attendi che il TTS abbia terminato la riproduzione audio
+    audio_queue.join()
+    generated_audio_queue.join()
+    channels = 1
+    buffer = []
+    last_sound_time = time.time()
+
+   
+    def callback(indata, frames, time_info, status):
+        nonlocal last_sound_time
+        volume_norm = np.linalg.norm(indata)
+        buffer.append(indata.copy())
+        if volume_norm > silence_threshold:
+            last_sound_time = time.time()
+
+    
+    with sd.InputStream(callback=callback, channels=channels, samplerate=sample_rate):
+        max_dots = shutil.get_terminal_size().columns - len("<You> ") - 1
+        if max_dots < 2:
+            max_dots = 1
+        while True:
+            time_of_silence = time.time() - last_sound_time
+            if time_of_silence > silence_duration :
+                # Clear the printed line before exiting
+                sys.stdout.write("\r" + " " * (len("<You> ") + max_dots) + "\r")
+                sys.stdout.flush()
+                break
+            # Calcola il numero di punti in base a quanto è basso il tempo di silenzio:
+            # se time_of_silence è vicino a 0, mostriamo max_dots punti,
+            # se è vicino a silence_duration, mostriamo meno punti.
+            ratio = time_of_silence / silence_duration
+            dot_count = int((1 - ratio) * max_dots)
+            # Assicuriamoci di avere almeno 1 punto
+            if dot_count < 1:
+                dot_count = 1
+            dots = "." * dot_count
+            sys.stdout.write("\r<You> " + dots + " " * (max_dots - dot_count))
+            sys.stdout.flush()
+            time.sleep(0.1)
+    if not buffer:
+        return
+    audio_data = np.concatenate(buffer, axis=0)
+    temp_wav = "voice/tmp.wav"
+    sf.write(temp_wav, audio_data, sample_rate)
+    
+
+def get_input_from_microphone(model):
+    
+    record_until_silence(silence_threshold=0.02, silence_duration=2, sample_rate=44100)
+    print("\r<You> ", end='', flush=True)
+    segments, _ = model.transcribe("voice/tmp.wav", word_timestamps=True,  vad_filter=True)
+    output = ''
+    for segment in segments:
+        if segment.words:
+            for word in segment.words:
+                output += word.word + ' '
+                print(f"{word.word} ", end='', flush=True)
+    if output != '':
+        print("")
+    
+    return output.strip()
+
 # =====================
 # Script Entry Point
 # =====================
 if __name__ == "__main__":
+
+    
     asyncio.run(main())
