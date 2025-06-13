@@ -311,7 +311,7 @@ def record_until_silence( silence_threshold=0.2, silence_duration=2, sample_rate
    
     def callback(indata, frames, time_info, status):
         nonlocal last_sound_time
-        volume_norm = np.linalg.norm(indata)
+        volume_norm = np.sqrt(np.mean(indata**2))
         buffer.append(indata.copy())
         if volume_norm > silence_threshold:
             last_sound_time = time.time()
@@ -328,9 +328,7 @@ def record_until_silence( silence_threshold=0.2, silence_duration=2, sample_rate
                 sys.stdout.write("\r" + " " * (len("<You> ") + max_dots) + "\r")
                 sys.stdout.flush()
                 break
-            # Calcola il numero di punti in base a quanto è basso il tempo di silenzio:
-            # se time_of_silence è vicino a 0, mostriamo max_dots punti,
-            # se è vicino a silence_duration, mostriamo meno punti.
+            
             ratio = time_of_silence / silence_duration
             dot_count = int((1 - ratio) * max_dots)
             # Assicuriamoci di avere almeno 1 punto
@@ -341,14 +339,17 @@ def record_until_silence( silence_threshold=0.2, silence_duration=2, sample_rate
             sys.stdout.flush()
             time.sleep(0.1)
     if not buffer:
-        return
+        return False
     audio_data = np.concatenate(buffer, axis=0)
     temp_wav = "voice/tmp.wav"
     sf.write(temp_wav, audio_data, sample_rate)
+    return True
     
-def get_input_from_microphone(model):
+def get_input_from_microphone(model, silence_threshold):
     
-    record_until_silence(silence_threshold=0.01, silence_duration=2, sample_rate=44100)
+    while not record_until_silence(silence_threshold = silence_threshold, silence_duration=2, sample_rate=44100):
+        time.sleep(0.1)
+        
     print("\r<You> ", end='', flush=True)
     segments, _ = model.transcribe("voice/tmp.wav", word_timestamps=True,  vad_filter=True)
     output = ''
@@ -361,6 +362,41 @@ def get_input_from_microphone(model):
         print("")
     
     return output.strip()
+
+def calib_silence_threshold(duration=5, channels=1, sample_rate=44100):
+    """
+    Calibrates the silence threshold by recording ambient noise for a given duration.
+    Returns an appropriate silence threshold value.
+    """
+    print(auto_translate("Calibrating silence threshold. Please remain quiet..."))
+    recordings = []
+    def callback(indata, frames, time_info, status):
+        recordings.append(indata.copy())
+
+    with sd.InputStream(callback=callback, channels=channels, samplerate=sample_rate):
+        # Record for the specified duration in milliseconds
+        sd.sleep(int(duration * 1000))
+
+    if not recordings:
+        print("No data recorded during calibration.")
+        return 0.2  # Fallback threshold
+
+    audio_data = np.concatenate(recordings, axis=0)
+    # Compute RMS for each frame
+    frame_size = 1024
+    rms_values = []
+    for start in range(0, len(audio_data), frame_size):
+        frame = audio_data[start:start+frame_size]
+        if frame.size == 0:
+            continue
+        rms = np.sqrt(np.mean(frame**2))
+        rms_values.append(rms)
+
+    mean_rms = np.mean(rms_values)
+    threshold = mean_rms * 1.8
+    print(f"Calibrated silence threshold: {threshold:.4f}")
+    os.system('cls' if os.name == 'nt' else 'clear')
+    return threshold
 
 # =====================
 # Main Application Entry Point
@@ -385,9 +421,9 @@ async def main():
     threading.Thread(target=audio_worker, daemon=True).start()
 
     model = WhisperModel(MODEL_VOICE_TRASC, device="cpu", compute_type="int8")
-
+    silence_threshold = calib_silence_threshold() 
     while True:
-        prompt = get_input_from_microphone(model)
+        prompt = get_input_from_microphone(model, silence_threshold = silence_threshold)
         if not prompt:
             continue
         memory_idx = retrieve_memory_context(embeddings, paragraphs_local_memory, prompt)
