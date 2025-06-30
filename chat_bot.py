@@ -35,7 +35,7 @@ import sys
 # =====================
 # Global Variables & Constants
 # =====================
-MODEL_CHATBOT = "gemma3:4b"  # Chatbot model name
+MODEL_CHATBOT = "gemma3n:e4b"  # Chatbot model name
 MODEL_EMB = "nomic-embed-text"  # Embedding model name
 MODEL_VOICE_TRASC = "large-v3"
 
@@ -49,15 +49,37 @@ audio_queue = queue.Queue()  # Queue for audio playback requests
 generated_audio_queue = queue.Queue()  # New queue for pre-generated audio data
 conversation = []  # History of conversation messages
 
+TRANSLATION_CACHE_FILE = "translations.json"
+translation_cache = {}
+
+def load_translation_cache():
+    global translation_cache
+    if os.path.exists(TRANSLATION_CACHE_FILE):
+        try:
+            with open(TRANSLATION_CACHE_FILE, "r", encoding="utf-8") as f:
+                translation_cache = json.load(f)
+        except Exception:
+            translation_cache = {}
+    else:
+        translation_cache = {}
+
+def save_translation_cache():
+    with open(TRANSLATION_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(translation_cache, f, ensure_ascii=False, indent=2)
+
 # =====================
 # Utility Functions
 # =====================
 def auto_translate(text):
     """
     Translates text into the system language (if not English).
+    Caches translations to avoid redundant requests.
     """
     if SYSTEM_LANGUAGE.lower() == 'english':
         return text
+    cache_key = f"{SYSTEM_LANGUAGE.lower()}::{text}"
+    if cache_key in translation_cache:
+        return translation_cache[cache_key]
     translate_prompt = (
         f"Translate the following text into {SYSTEM_LANGUAGE}: '{text}'\n"
         f"Generate only the translated text in {SYSTEM_LANGUAGE}."
@@ -68,7 +90,10 @@ def auto_translate(text):
         options={"temperature": 0},
         stream=False
     )
-    return response["message"]["content"]
+    translated = response["message"]["content"]
+    translation_cache[cache_key] = translated
+    save_translation_cache()
+    return translated
 
 def parse_file(filename):
     """
@@ -195,6 +220,7 @@ def retrieve_memory_context(embeddings, paragraphs, prompt):
     for score, index in most_similar_chunks:
         if score > 0.5:
             mem_prompt += paragraphs[index] + "\n"
+            print(f"<memory> {paragraphs[index]}")
     conversation.append({"role": "system", "content": mem_prompt})
     return len(conversation) - 1
 
@@ -206,16 +232,20 @@ def save_information_from_index(prompt, response_ai, filename, embeddings, parag
     system_prompt = {
         "role": "system",
         "content": auto_translate(
-            ("You are a memory generator. Given the full conversation, extract data that the assistant must remember. "
-             "Respond with one or more concise sentences (each on a new line) without additional explanation.")
+            ("You are a memory generator. Given the full conversation, extract data that the assistant must remember."
+             "Respond with one or more concise sentences (each on a new line).")
         )
     }
     temp_conversation = [system_prompt, {"role": "user", "content": f"user: {prompt}\nAI: {response_ai}"}]
     response = ollama.chat(model=MODEL_CHATBOT, messages=temp_conversation, options={"temperature": 0}, stream=False)
     response = response["message"]["content"]
     memories = response.split('\n')
-    if memories == [""]:
+    if memories == [""]: 
         return embeddings, paragraphs
+    # add datatime to memories
+    datatime_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    memories = [ datatime_now+' - '+m for m in memories if m.strip()  ]
+        
     candidate_embeddings = [ollama.embeddings(model=MODEL_EMB, prompt=m)["embedding"] for m in memories if m.strip()]
     new_embeddings = []
     threshold = 0.8
@@ -269,6 +299,8 @@ def play_audio(text):
     """
     Enqueues text for audio playback if voice output is enabled.
     """
+    # remove '*' from text
+    text = text.replace('*', '')
     if VOICE_TOGGLED:
         audio_queue.put(text)
 
@@ -357,10 +389,9 @@ def get_input_from_microphone(model, silence_threshold):
         if segment.words:
             for word in segment.words:
                 output += word.word + ' '
-                print(f"{word.word} ", end='', flush=True)
+                print(f"{word.word}", end='', flush=True)
     if output != '':
         print("")
-    
     return output.strip()
 
 def calib_silence_threshold(duration=5, channels=1, sample_rate=44100):
@@ -405,6 +436,7 @@ async def main():
     """
     Main loop: Handles user input while retrieving context, search results, and processing responses.
     """
+    load_translation_cache()
     SYSTEM_PROMPT = auto_translate(
         ("You are Gemma, an AI assistant that retrieves live data via internet, memory, or screenshots. "
          "Incorporate any attached results before responding concisely and expressively with abundant punctuation (no emojis).")
