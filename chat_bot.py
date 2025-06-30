@@ -36,7 +36,7 @@ import sys
 # Global Variables & Constants
 # =====================
 MODEL_CHATBOT = "gemma3n:e4b"  # Chatbot model name
-MODEL_EMB = "nomic-embed-text"  # Embedding model name
+MODEL_EMB = "snowflake-arctic-embed2"  # Embedding model name
 MODEL_VOICE_TRASC = "large-v3"
 
 
@@ -214,13 +214,14 @@ def retrieve_memory_context(embeddings, paragraphs, prompt):
     """
     Retrieves relevant memory context for the prompt and appends it to the conversation.
     """
+    
     prompt_embedding = ollama.embeddings(model=MODEL_EMB, prompt=prompt)["embedding"]
     most_similar_chunks = find_similar(prompt_embedding, embeddings)[:15]
     mem_prompt = "\nContext: " + auto_translate("Current Date and Time: ") + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n"
-    for score, index in most_similar_chunks:
-        if score > 0.5:
-            mem_prompt += paragraphs[index] + "\n"
-            print(f"<memory> {paragraphs[index]}")
+    
+    for _, index in most_similar_chunks:
+        mem_prompt += paragraphs[index] + "\n"
+
     conversation.append({"role": "system", "content": mem_prompt})
     return len(conversation) - 1
 
@@ -424,7 +425,8 @@ def calib_silence_threshold(duration=5, channels=1, sample_rate=44100):
         rms_values.append(rms)
 
     mean_rms = np.mean(rms_values)
-    threshold = mean_rms * 1.8
+    offset = 0.01  # Small offset to avoid zero threshold
+    threshold = mean_rms * 2 + offset  # Set threshold as twice the mean RMS
     print(f"Calibrated silence threshold: {threshold:.4f}")
     os.system('cls' if os.name == 'nt' else 'clear')
     return threshold
@@ -438,8 +440,8 @@ async def main():
     """
     load_translation_cache()
     SYSTEM_PROMPT = auto_translate(
-        ("You are Gemma, an AI assistant that retrieves live data via internet, memory, or screenshots. "
-         "Incorporate any attached results before responding concisely and expressively with abundant punctuation (no emojis).")
+        ("You are Gemma, an AI assistant that retrieves live data via internet or memory"
+         "respond concisely and expressively with abundant punctuation (no emojis).")
     )
     conversation.append({"role": "system", "content": SYSTEM_PROMPT})
     filename = "memory.txt"
