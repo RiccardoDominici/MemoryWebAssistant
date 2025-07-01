@@ -244,8 +244,7 @@ def save_information_from_index(prompt, response_ai, filename, embeddings, parag
     if memories == [""]: 
         return embeddings, paragraphs
     # add datatime to memories
-    datatime_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    memories = [ datatime_now+' - '+m for m in memories if m.strip()  ]
+    memories = [ m for m in memories if m.strip()  ]
         
     candidate_embeddings = [ollama.embeddings(model=MODEL_EMB, prompt=m)["embedding"] for m in memories if m.strip()]
     new_embeddings = []
@@ -302,6 +301,15 @@ def play_audio(text):
     """
     # remove '*' from text
     text = text.replace('*', '')
+    # remove emojis from text
+    emoji_pattern = re.compile("["
+                               u"\U0001F600-\U0001F64F"
+                               u"\U0001F300-\U0001F5FF"
+                               u"\U0001F680-\U0001F6FF"
+                               u"\U0001F1E0-\U0001F1FF"
+                               "]+", flags=re.UNICODE)
+    text = emoji_pattern.sub("", text)
+    
     if VOICE_TOGGLED:
         audio_queue.put(text)
 

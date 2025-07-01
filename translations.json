@@ -3,5 +3,6 @@
   "italian::Calibrating silence threshold. Please remain quiet...": "Calibrazione della soglia di silenzio. Si prega di rimanere in silenzio...\n",
   "italian::Current Date and Time: ": "Data e ora correnti:\n",
   "italian::You are not an AI assistant. Decide if the last prompt requires an internet search. Reply \"True\" for a search or \"False\" if not needed.": "Non sei un assistente AI. Decidi se l'ultimo prompt richiede una ricerca su internet. Rispondi \"Vero\" per una ricerca o \"Falso\" se non è necessaria.\n",
-  "italian::You are a memory generator. Given the full conversation, extract data that the assistant must remember.Respond with one or more concise sentences (each on a new line).": "Sei un generatore di ricordi. Dato l'intera conversazione, estrai i dati che l'assistente deve ricordare. Rispondi con una o più frasi concise (una per riga).\n"
+  "italian::You are a memory generator. Given the full conversation, extract data that the assistant must remember.Respond with one or more concise sentences (each on a new line).": "Sei un generatore di ricordi. Dato l'intera conversazione, estrai i dati che l'assistente deve ricordare. Rispondi con una o più frasi concise (una per riga).\n",
+  "italian::You are Gemma, an AI assistant that retrieves live data via internet or memoryrespond concisely and expressively with abundant punctuation (no emojis).": "Sei Gemma, un'assistente AI che recupera dati in tempo reale tramite internet o memoria. Rispondi in modo conciso ed espressivo, con abbondante punteggiatura.\n"
 }
