@@ -112,11 +112,24 @@ class RetrievalMode(Enum):
     CAG = "cag"
 
 
+class InferenceBackend(Enum):
+    OLLAMA = "ollama"
+    AIRLLM = "airllm"
+
+
 @dataclass
 class Config:
+    inference_backend: InferenceBackend = InferenceBackend.OLLAMA
     model_chatbot: str = "gemma3n:e4b"
     model_embedding: str = "snowflake-arctic-embed2"
     model_voice_transcription: str = "large-v3"
+    airllm_model_name: str = "meta-llama/Llama-3.1-8B-Instruct"
+    airllm_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    airllm_quantization: str = "4bit"
+    airllm_compression: str = "none"
+    airllm_max_seq_len: int = 512
+    airllm_max_new_tokens: int = 256
+    airllm_embedding_batch_size: int = 32
     system_language: str = "italian"
     voice_name: str = "if_sara"
     voice_enabled: bool = True
@@ -410,7 +423,11 @@ class TestConfig(unittest.TestCase):
         """Test that Config has all expected fields."""
         config = Config()
         expected_fields = [
+            'inference_backend',
             'model_chatbot', 'model_embedding', 'model_voice_transcription',
+            'airllm_model_name', 'airllm_embedding_model', 'airllm_quantization',
+            'airllm_compression', 'airllm_max_seq_len', 'airllm_max_new_tokens',
+            'airllm_embedding_batch_size',
             'system_language', 'voice_name', 'voice_enabled',
             'retrieval_mode', 'rag_top_k', 'cag_max_chars',
             'similarity_threshold', 'memory_file', 'embeddings_dir',
@@ -579,6 +596,207 @@ class TestSimilarityThreshold(unittest.TestCase):
         similarity = 0.8
         is_unique = similarity <= threshold
         self.assertTrue(is_unique)
+
+
+class TestInferenceBackend(unittest.TestCase):
+    """Tests for the InferenceBackend enum."""
+
+    def test_backend_values(self):
+        """Test that InferenceBackend enum has correct values."""
+        self.assertEqual(InferenceBackend.OLLAMA.value, "ollama")
+        self.assertEqual(InferenceBackend.AIRLLM.value, "airllm")
+
+    def test_backend_comparison(self):
+        """Test that InferenceBackend enum members can be compared."""
+        self.assertEqual(InferenceBackend.OLLAMA, InferenceBackend.OLLAMA)
+        self.assertNotEqual(InferenceBackend.OLLAMA, InferenceBackend.AIRLLM)
+
+    def test_backend_from_value(self):
+        """Test creating InferenceBackend from string value."""
+        self.assertEqual(InferenceBackend("ollama"), InferenceBackend.OLLAMA)
+        self.assertEqual(InferenceBackend("airllm"), InferenceBackend.AIRLLM)
+
+    def test_invalid_backend_raises(self):
+        """Test that invalid backend value raises ValueError."""
+        with self.assertRaises(ValueError):
+            InferenceBackend("invalid")
+
+
+class TestConfigWithAirLLM(unittest.TestCase):
+    """Tests for Config with AirLLM settings."""
+
+    def test_default_backend_is_ollama(self):
+        """Test that default backend is Ollama."""
+        config = Config()
+        self.assertEqual(config.inference_backend, InferenceBackend.OLLAMA)
+
+    def test_airllm_config_defaults(self):
+        """Test AirLLM configuration default values."""
+        config = Config()
+        self.assertEqual(config.airllm_model_name, "meta-llama/Llama-3.1-8B-Instruct")
+        self.assertEqual(config.airllm_embedding_model, "sentence-transformers/all-MiniLM-L6-v2")
+        self.assertEqual(config.airllm_quantization, "4bit")
+        self.assertEqual(config.airllm_compression, "none")
+        self.assertEqual(config.airllm_max_seq_len, 512)
+        self.assertEqual(config.airllm_max_new_tokens, 256)
+        self.assertEqual(config.airllm_embedding_batch_size, 32)
+
+    def test_airllm_backend_config(self):
+        """Test Config with AirLLM backend selected."""
+        config = Config(
+            inference_backend=InferenceBackend.AIRLLM,
+            airllm_model_name="mistralai/Mistral-7B-v0.1",
+            airllm_quantization="8bit",
+            airllm_max_seq_len=1024,
+        )
+        self.assertEqual(config.inference_backend, InferenceBackend.AIRLLM)
+        self.assertEqual(config.airllm_model_name, "mistralai/Mistral-7B-v0.1")
+        self.assertEqual(config.airllm_quantization, "8bit")
+        self.assertEqual(config.airllm_max_seq_len, 1024)
+
+    def test_config_has_all_airllm_fields(self):
+        """Test that Config has all AirLLM-related fields."""
+        config = Config()
+        airllm_fields = [
+            'inference_backend', 'airllm_model_name', 'airllm_embedding_model',
+            'airllm_quantization', 'airllm_compression', 'airllm_max_seq_len',
+            'airllm_max_new_tokens', 'airllm_embedding_batch_size'
+        ]
+        for field in airllm_fields:
+            self.assertTrue(hasattr(config, field), f"Missing field: {field}")
+
+    def test_quantization_values(self):
+        """Test valid quantization options."""
+        valid_options = ["none", "8bit", "4bit"]
+        for opt in valid_options:
+            config = Config(airllm_quantization=opt)
+            self.assertEqual(config.airllm_quantization, opt)
+
+    def test_compression_values(self):
+        """Test valid compression options."""
+        valid_options = ["none", "gzip", "zstd"]
+        for opt in valid_options:
+            config = Config(airllm_compression=opt)
+            self.assertEqual(config.airllm_compression, opt)
+
+
+class TestAirLLMBackendModule(unittest.TestCase):
+    """Tests for the airllm_backend module structures (no model loading)."""
+
+    def test_airllm_config_dataclass(self):
+        """Test AirLLMConfig dataclass from backend module."""
+        from airllm_backend import AirLLMConfig, QuantizationType, CompressionType
+
+        config = AirLLMConfig()
+        self.assertEqual(config.model_name, "meta-llama/Llama-3.1-8B-Instruct")
+        self.assertEqual(config.quantization, QuantizationType.INT4)
+        self.assertEqual(config.compression, CompressionType.NONE)
+        self.assertEqual(config.max_seq_len, 512)
+        self.assertEqual(config.embedding_batch_size, 32)
+
+    def test_quantization_enum(self):
+        """Test QuantizationType enum values."""
+        from airllm_backend import QuantizationType
+
+        self.assertEqual(QuantizationType.NONE.value, "none")
+        self.assertEqual(QuantizationType.INT8.value, "8bit")
+        self.assertEqual(QuantizationType.INT4.value, "4bit")
+
+    def test_compression_enum(self):
+        """Test CompressionType enum values."""
+        from airllm_backend import CompressionType
+
+        self.assertEqual(CompressionType.NONE.value, "none")
+        self.assertEqual(CompressionType.GZIP.value, "gzip")
+        self.assertEqual(CompressionType.ZSTD.value, "zstd")
+
+    def test_engine_creation(self):
+        """Test AirLLMEngine can be instantiated without loading models."""
+        from airllm_backend import AirLLMEngine, AirLLMConfig
+
+        engine = AirLLMEngine(AirLLMConfig())
+        self.assertFalse(engine._is_initialized)
+        self.assertIsNone(engine._model)
+        self.assertIsNone(engine._embedding_model)
+
+    def test_engine_model_info(self):
+        """Test get_model_info before initialization."""
+        from airllm_backend import AirLLMEngine, AirLLMConfig
+
+        config = AirLLMConfig(
+            model_name="test-model",
+            quantization=QuantizationType.INT8 if False else None,
+        )
+        # Use default config for this test
+        config = AirLLMConfig(model_name="test-model")
+        engine = AirLLMEngine(config)
+        info = engine.get_model_info()
+
+        self.assertEqual(info["model_name"], "test-model")
+        self.assertFalse(info["initialized"])
+
+    def test_engine_cleanup(self):
+        """Test engine cleanup releases resources."""
+        from airllm_backend import AirLLMEngine, AirLLMConfig
+
+        engine = AirLLMEngine(AirLLMConfig())
+        engine.cleanup()
+
+        self.assertFalse(engine._is_initialized)
+        self.assertIsNone(engine._model)
+        self.assertIsNone(engine._embedding_model)
+
+    def test_chat_message_formatting(self):
+        """Test that chat messages are formatted correctly for the model."""
+        from airllm_backend import AirLLMEngine, AirLLMConfig
+
+        engine = AirLLMEngine(AirLLMConfig())
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello!"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "How are you?"},
+        ]
+
+        formatted = engine._format_chat_messages(messages)
+
+        self.assertIn("<|system|>", formatted)
+        self.assertIn("You are a helpful assistant.", formatted)
+        self.assertIn("<|user|>", formatted)
+        self.assertIn("Hello!", formatted)
+        self.assertIn("<|assistant|>", formatted)
+        self.assertIn("Hi there!", formatted)
+        self.assertIn("How are you?", formatted)
+
+    def test_singleton_reset(self):
+        """Test that engine singleton can be reset."""
+        from airllm_backend import get_engine, reset_engine, _engine
+
+        reset_engine()
+        # After reset, global engine should be None
+        import airllm_backend
+        self.assertIsNone(airllm_backend._engine)
+
+    def test_airllm_config_custom_values(self):
+        """Test AirLLMConfig with custom values."""
+        from airllm_backend import AirLLMConfig, QuantizationType, CompressionType
+
+        config = AirLLMConfig(
+            model_name="custom/model",
+            max_seq_len=1024,
+            quantization=QuantizationType.INT8,
+            compression=CompressionType.GZIP,
+            embedding_batch_size=64,
+            max_new_tokens=512,
+            temperature=0.5,
+        )
+        self.assertEqual(config.model_name, "custom/model")
+        self.assertEqual(config.max_seq_len, 1024)
+        self.assertEqual(config.quantization, QuantizationType.INT8)
+        self.assertEqual(config.compression, CompressionType.GZIP)
+        self.assertEqual(config.embedding_batch_size, 64)
+        self.assertEqual(config.max_new_tokens, 512)
+        self.assertEqual(config.temperature, 0.5)
 
 
 if __name__ == "__main__":

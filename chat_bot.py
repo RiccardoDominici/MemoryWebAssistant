@@ -70,6 +70,26 @@ class RetrievalMode(Enum):
     CAG = "cag"
 
 
+class InferenceBackend(Enum):
+    """
+    Defines the inference backend for LLM execution.
+
+    OLLAMA:
+        - Uses Ollama for local inference (default)
+        - Requires Ollama installed and running
+        - Supports many model formats (GGUF, etc.)
+
+    AIRLLM:
+        - Uses AirLLM for memory-efficient inference
+        - Loads model layers one at a time (minimal VRAM)
+        - Supports 4-bit/8-bit quantization
+        - Can run 70B+ models on consumer hardware
+        - Uses HuggingFace models directly
+    """
+    OLLAMA = "ollama"
+    AIRLLM = "airllm"
+
+
 # ==============================================================================
 # Configuration - Main Settings
 # ==============================================================================
@@ -77,10 +97,22 @@ class RetrievalMode(Enum):
 class Config:
     """Central configuration for the chatbot."""
 
-    # Model Configuration
+    # Inference Backend
+    inference_backend: InferenceBackend = InferenceBackend.OLLAMA
+
+    # Model Configuration (Ollama)
     model_chatbot: str = "gemma3n:e4b"
     model_embedding: str = "snowflake-arctic-embed2"
     model_voice_transcription: str = "large-v3"
+
+    # AirLLM Configuration
+    airllm_model_name: str = "meta-llama/Llama-3.1-8B-Instruct"
+    airllm_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    airllm_quantization: str = "4bit"       # "none", "8bit", "4bit"
+    airllm_compression: str = "none"        # "none", "gzip", "zstd"
+    airllm_max_seq_len: int = 512
+    airllm_max_new_tokens: int = 256
+    airllm_embedding_batch_size: int = 32
 
     # Language & Voice
     system_language: str = "italian"
@@ -111,6 +143,102 @@ audio_queue: queue.Queue = queue.Queue()
 generated_audio_queue: queue.Queue = queue.Queue()
 conversation: list = []
 translation_cache: dict = {}
+_airllm_engine = None
+
+
+# ==============================================================================
+# Backend Abstraction - Unified inference interface
+# ==============================================================================
+def _get_airllm_engine():
+    """Get or initialize the AirLLM engine singleton."""
+    global _airllm_engine
+    if _airllm_engine is None:
+        from airllm_backend import AirLLMEngine, AirLLMConfig, QuantizationType, CompressionType
+
+        quantization_map = {
+            "none": QuantizationType.NONE,
+            "8bit": QuantizationType.INT8,
+            "4bit": QuantizationType.INT4,
+        }
+        compression_map = {
+            "none": CompressionType.NONE,
+            "gzip": CompressionType.GZIP,
+            "zstd": CompressionType.ZSTD,
+        }
+
+        airllm_config = AirLLMConfig(
+            model_name=CONFIG.airllm_model_name,
+            embedding_model_name=CONFIG.airllm_embedding_model,
+            quantization=quantization_map.get(CONFIG.airllm_quantization, QuantizationType.INT4),
+            compression=compression_map.get(CONFIG.airllm_compression, CompressionType.NONE),
+            max_seq_len=CONFIG.airllm_max_seq_len,
+            max_new_tokens=CONFIG.airllm_max_new_tokens,
+            embedding_batch_size=CONFIG.airllm_embedding_batch_size,
+        )
+        _airllm_engine = AirLLMEngine(airllm_config)
+
+    return _airllm_engine
+
+
+def backend_chat(
+    messages: list[dict],
+    temperature: Optional[float] = None,
+    stream: bool = False
+) -> dict:
+    """
+    Send a chat request using the configured backend.
+    Returns response in Ollama-compatible format.
+    """
+    if CONFIG.inference_backend == InferenceBackend.AIRLLM:
+        engine = _get_airllm_engine()
+        return engine.chat(messages, temperature=temperature, stream=stream)
+    else:
+        kwargs = {"model": CONFIG.model_chatbot, "messages": messages, "stream": stream}
+        if temperature is not None:
+            kwargs["options"] = {"temperature": temperature}
+        return ollama.chat(**kwargs)
+
+
+def backend_chat_stream(messages: list[dict]) -> object:
+    """
+    Send a streaming chat request using the configured backend.
+    Returns an iterable of response chunks.
+    """
+    if CONFIG.inference_backend == InferenceBackend.AIRLLM:
+        engine = _get_airllm_engine()
+        return engine.chat(messages, stream=True)
+    else:
+        return ollama.chat(
+            model=CONFIG.model_chatbot,
+            messages=messages,
+            stream=True
+        )
+
+
+def backend_embedding(prompt: str) -> list[float]:
+    """
+    Generate an embedding vector for a single text using the configured backend.
+    """
+    if CONFIG.inference_backend == InferenceBackend.AIRLLM:
+        engine = _get_airllm_engine()
+        return engine.embeddings(prompt)["embedding"]
+    else:
+        return ollama.embeddings(model=CONFIG.model_embedding, prompt=prompt)["embedding"]
+
+
+def backend_batch_embeddings(texts: list[str]) -> list[list[float]]:
+    """
+    Generate embeddings for multiple texts.
+    AirLLM processes in efficient batches; Ollama processes one at a time.
+    """
+    if CONFIG.inference_backend == InferenceBackend.AIRLLM:
+        engine = _get_airllm_engine()
+        return engine.batch_embeddings(texts)
+    else:
+        return [
+            ollama.embeddings(model=CONFIG.model_embedding, prompt=text)["embedding"]
+            for text in texts
+        ]
 
 
 # ==============================================================================
@@ -172,10 +300,9 @@ def auto_translate(text: str) -> str:
         f"Generate only the translated text in {CONFIG.system_language}."
     )
 
-    response = ollama.chat(
-        model=CONFIG.model_chatbot,
+    response = backend_chat(
         messages=[{"role": "system", "content": translate_prompt}],
-        options={"temperature": 0},
+        temperature=0,
         stream=False
     )
 
@@ -269,10 +396,7 @@ def get_embeddings(filename: str, chunks: list[str]) -> list[list[float]]:
         return loaded["embeddings"]
 
     print(f"Generating embeddings for {len(chunks)} chunks...")
-    embeddings = [
-        ollama.embeddings(model=CONFIG.model_embedding, prompt=chunk)["embedding"]
-        for chunk in chunks
-    ]
+    embeddings = backend_batch_embeddings(chunks)
 
     data_to_save = {"hash": current_hash, "embeddings": embeddings}
     save_embeddings(filename, data_to_save)
@@ -333,10 +457,7 @@ def retrieve_memory_context_rag(
     Returns:
         Index of the added context message in conversation
     """
-    prompt_embedding = ollama.embeddings(
-        model=CONFIG.model_embedding,
-        prompt=prompt
-    )["embedding"]
+    prompt_embedding = backend_embedding(prompt)
 
     most_similar = find_similar(prompt_embedding, embeddings)[:CONFIG.rag_top_k]
 
@@ -458,10 +579,9 @@ def save_information_from_conversation(
         {"role": "user", "content": f"User: {prompt}\nAssistant: {response_ai}"}
     ]
 
-    response = ollama.chat(
-        model=CONFIG.model_chatbot,
+    response = backend_chat(
         messages=temp_conversation,
-        options={"temperature": 0},
+        temperature=0,
         stream=False
     )
 
@@ -470,11 +590,8 @@ def save_information_from_conversation(
     if not memories:
         return embeddings, paragraphs
 
-    # Generate embeddings for candidate memories
-    candidate_embeddings = [
-        ollama.embeddings(model=CONFIG.model_embedding, prompt=m)["embedding"]
-        for m in memories
-    ]
+    # Generate embeddings for candidate memories (batch for efficiency)
+    candidate_embeddings = backend_batch_embeddings(memories)
 
     new_embeddings = []
     new_memories = []
@@ -525,11 +642,7 @@ def stream_response(prompt: str) -> str:
     conversation.append({"role": "user", "content": prompt})
 
     response = ""
-    stream = ollama.chat(
-        model=CONFIG.model_chatbot,
-        messages=conversation,
-        stream=True
-    )
+    stream = backend_chat_stream(conversation)
 
     print("<Gemma> ", end="", flush=True)
 
@@ -580,10 +693,10 @@ def handle_screenshot_request(prompt: str) -> int:
         {"role": "user", "content": prompt}
     ]
 
-    response = ollama.chat(
-        model=CONFIG.model_chatbot,
+    response = backend_chat(
         messages=temp_conversation,
-        options={"temperature": 0}
+        temperature=0,
+        stream=False
     )
 
     if "true" in response["message"]["content"].lower():
@@ -624,10 +737,10 @@ def handle_search_request(prompt: str) -> int:
         {"role": "user", "content": prompt}
     ]
 
-    response = ollama.chat(
-        model=CONFIG.model_chatbot,
+    response = backend_chat(
         messages=temp_conversation,
-        options={"temperature": 0}
+        temperature=0,
+        stream=False
     )
 
     if "true" not in response["message"]["content"].lower():
@@ -898,8 +1011,17 @@ def print_config_info() -> None:
     print("=" * 60)
     print("MemoryWebAssistant Configuration")
     print("=" * 60)
+    print(f"  Backend: {CONFIG.inference_backend.value}")
+
+    if CONFIG.inference_backend == InferenceBackend.AIRLLM:
+        print(f"  AirLLM Model: {CONFIG.airllm_model_name}")
+        print(f"  Quantization: {CONFIG.airllm_quantization}")
+        print(f"  Embedding Model: {CONFIG.airllm_embedding_model}")
+        print(f"  Max Seq Length: {CONFIG.airllm_max_seq_len}")
+    else:
+        print(f"  Model: {CONFIG.model_chatbot}")
+
     print(f"  Retrieval Mode: {mode_info[CONFIG.retrieval_mode]}")
-    print(f"  Model: {CONFIG.model_chatbot}")
     print(f"  Language: {CONFIG.system_language}")
     print(f"  Voice: {CONFIG.voice_enabled}")
     print("=" * 60)

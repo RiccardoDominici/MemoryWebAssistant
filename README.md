@@ -4,9 +4,11 @@ A fully local AI chatbot with persistent memory, voice I/O, and web search capab
 
 ## Features
 
-- **Local LLM Inference**: Uses [Ollama](https://ollama.com/) to run language models locally (Gemma, Llama, Mistral, etc.)
+- **Dual Inference Backends**: Choose between [Ollama](https://ollama.com/) and [AirLLM](https://github.com/lyogavin/airllm) for LLM inference
+- **AirLLM Support**: Run 70B+ parameter models on consumer hardware with layer-by-layer loading, 4-bit/8-bit quantization
 - **Persistent Memory**: Automatically extracts and stores important information from conversations
 - **Dual Retrieval Modes**: Choose between RAG (Retrieval-Augmented Generation) and CAG (Cache-Augmented Generation)
+- **Batch Embeddings**: Efficient batch embedding generation (especially with AirLLM's sentence-transformers backend)
 - **Voice Input/Output**: Speech-to-text via Whisper, text-to-speech via [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)
 - **Web Search**: Optional internet search integration with user confirmation
 - **Multi-language Support**: Automatic translation with caching
@@ -21,10 +23,19 @@ MemoryWebAssistant supports two memory retrieval strategies:
 | **RAG** | Retrieves only the most relevant memory chunks using semantic similarity search (default: top 15) | Large memory files, specific queries |
 | **CAG** | Loads all available memory into context (up to configurable limit) | Small memory files, comprehensive context |
 
+## Inference Backends
+
+MemoryWebAssistant supports two inference backends:
+
+| Backend | Description | Best For |
+|---------|-------------|----------|
+| **Ollama** (default) | Standard local inference via Ollama. Easy setup, wide model support (GGUF). | General use, quick setup |
+| **AirLLM** | Memory-efficient inference loading layers one at a time. Supports 4-bit/8-bit quantization. | Running 70B+ models on limited hardware (8GB+ RAM/VRAM) |
+
 ## Requirements
 
 - Python 3.10+
-- [Ollama](https://ollama.com/download) installed and running
+- [Ollama](https://ollama.com/download) installed and running (for Ollama backend)
 - Audio input/output devices (for voice features)
 
 ## Installation
@@ -38,12 +49,22 @@ cd MemoryWebAssistant
 
 ### 2. Install Python Dependencies
 
+**Core dependencies (required):**
 ```bash
 pip install numpy ollama pillow soundfile simpleaudio sounddevice faster-whisper misaki kokoro-onnx
 ```
 
-### 3. Download Ollama Models
+**AirLLM backend (optional):**
+```bash
+pip install airllm transformers sentence-transformers
 
+# For 4-bit quantization:
+pip install bitsandbytes
+```
+
+### 3. Download Models
+
+**For Ollama backend:**
 ```bash
 # Download chatbot model
 ollama pull gemma3n:e4b
@@ -53,6 +74,9 @@ ollama pull snowflake-arctic-embed2
 ```
 
 You can substitute these with any compatible models available in Ollama.
+
+**For AirLLM backend:**
+Models are downloaded automatically from HuggingFace on first use. No manual download needed.
 
 ### 4. Set Up Voice Files
 
@@ -90,7 +114,7 @@ Speak naturally—the assistant will transcribe your speech, process it with con
 
 ### Running Tests
 
-The project includes a comprehensive test suite with 42 unit tests covering all core functionality.
+The project includes a comprehensive test suite covering all core functionality including AirLLM integration.
 
 ```bash
 # Run all tests
@@ -117,41 +141,19 @@ python -m unittest test_chat_bot.TestCosineSimilarity.test_opposite_vectors -v
 | `TestTranslationCache` | 5 | Translation caching with unicode support |
 | `TestHashGeneration` | 3 | MD5 hashing for cache invalidation |
 | `TestSimilarityThreshold` | 3 | Memory deduplication logic |
+| `TestInferenceBackend` | 4 | Backend enum validation (Ollama/AirLLM) |
+| `TestConfigWithAirLLM` | 6 | AirLLM config defaults, quantization, compression |
+| `TestAirLLMBackendModule` | 9 | AirLLM engine, message formatting, singleton, config |
 
 ## Configuration
 
 All settings are centralized in the `Config` dataclass at the top of `chat_bot.py`:
 
-```python
-@dataclass
-class Config:
-    # Model Configuration
-    model_chatbot: str = "gemma3n:e4b"
-    model_embedding: str = "snowflake-arctic-embed2"
-    model_voice_transcription: str = "large-v3"
-
-    # Language & Voice
-    system_language: str = "italian"
-    voice_name: str = "if_sara"
-    voice_enabled: bool = True
-
-    # Retrieval Configuration
-    retrieval_mode: RetrievalMode = RetrievalMode.RAG
-    rag_top_k: int = 15                    # Number of chunks for RAG
-    cag_max_chars: int = 50000             # Max characters for CAG
-    similarity_threshold: float = 0.8      # Memory deduplication threshold
-
-    # File Paths
-    memory_file: str = "memory.txt"
-    embeddings_dir: str = "embeddings"
-    voice_dir: str = "voice"
-    translation_cache_file: str = "translations.json"
-```
-
 ### Configuration Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `inference_backend` | `OLLAMA` or `AIRLLM` | `OLLAMA` |
 | `model_chatbot` | Ollama model for chat responses | `gemma3n:e4b` |
 | `model_embedding` | Ollama model for embeddings | `snowflake-arctic-embed2` |
 | `model_voice_transcription` | Whisper model size | `large-v3` |
@@ -163,9 +165,33 @@ class Config:
 | `cag_max_chars` | Maximum context size for CAG | `50000` |
 | `similarity_threshold` | Threshold for memory deduplication | `0.8` |
 
+#### AirLLM-specific Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `airllm_model_name` | HuggingFace model ID | `meta-llama/Llama-3.1-8B-Instruct` |
+| `airllm_embedding_model` | Sentence-transformers model for embeddings | `sentence-transformers/all-MiniLM-L6-v2` |
+| `airllm_quantization` | Quantization: `none`, `8bit`, `4bit` | `4bit` |
+| `airllm_compression` | Layer compression: `none`, `gzip`, `zstd` | `none` |
+| `airllm_max_seq_len` | Maximum sequence length | `512` |
+| `airllm_max_new_tokens` | Maximum tokens to generate | `256` |
+| `airllm_embedding_batch_size` | Batch size for embedding generation | `32` |
+
+### Switching Inference Backend
+
+To use AirLLM instead of Ollama:
+
+```python
+CONFIG = Config(
+    inference_backend=InferenceBackend.AIRLLM,
+    airllm_model_name="meta-llama/Llama-3.1-8B-Instruct",
+    airllm_quantization="4bit",
+)
+```
+
 ### Switching Retrieval Modes
 
-To use CAG instead of RAG, modify the config:
+To use CAG instead of RAG:
 
 ```python
 CONFIG = Config(retrieval_mode=RetrievalMode.CAG)
@@ -175,9 +201,10 @@ CONFIG = Config(retrieval_mode=RetrievalMode.CAG)
 
 ```
 MemoryWebAssistant/
-├── chat_bot.py           # Main application
+├── chat_bot.py           # Main application with backend abstraction
+├── airllm_backend.py     # AirLLM inference engine module
 ├── agent_web.py          # Web search agent
-├── test_chat_bot.py      # Unit tests (42 tests)
+├── test_chat_bot.py      # Unit tests (61 tests)
 ├── translations.json     # Translation cache
 ├── memory.txt            # Persistent memory storage
 ├── embeddings/           # Cached embedding vectors
@@ -186,6 +213,7 @@ MemoryWebAssistant/
 │   ├── kokoro-v1.0.onnx
 │   ├── voices-v1.0.bin
 │   └── tmp.wav          # Temporary recording file
+├── models_cache/         # AirLLM model cache (auto-created)
 └── README.md
 ```
 
@@ -194,9 +222,19 @@ MemoryWebAssistant/
 1. **Voice Input**: Records audio until silence is detected, then transcribes using Whisper
 2. **Memory Retrieval**: Fetches relevant context using RAG (semantic search) or CAG (full context)
 3. **Web Search**: Optionally searches the internet if the query requires current information
-4. **Response Generation**: Generates a response using the LLM with retrieved context
+4. **Response Generation**: Generates a response using the configured backend (Ollama or AirLLM)
 5. **Memory Extraction**: Automatically extracts and saves new information from the conversation
 6. **Voice Output**: Synthesizes speech for each sentence as it's generated
+
+### AirLLM Optimization Details
+
+When using the AirLLM backend, the system applies several optimizations:
+
+- **Layer-by-layer loading**: Only one transformer layer is loaded into memory at a time, enabling 70B+ models on 8GB hardware
+- **Quantization**: 4-bit (default) or 8-bit quantization reduces memory by 4-8x
+- **Batch embeddings**: Multiple texts are embedded in efficient batches using sentence-transformers
+- **Lazy initialization**: Models are loaded only when first needed, not at startup
+- **Singleton pattern**: Model resources are shared across all inference calls
 
 ## Privacy
 
@@ -244,6 +282,8 @@ python -m unittest test_chat_bot -v
 ## Credits
 
 - [Ollama](https://ollama.com) - Local LLM inference
+- [AirLLM](https://github.com/lyogavin/airllm) - Memory-efficient LLM inference
+- [sentence-transformers](https://www.sbert.net/) - Embedding generation for AirLLM backend
 - [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) - Text-to-speech
 - [faster-whisper](https://github.com/guillaumekln/faster-whisper) - Speech-to-text
 - [smolagents](https://github.com/huggingface/smolagents) - Web search agent
